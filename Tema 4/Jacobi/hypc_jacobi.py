@@ -83,8 +83,7 @@ def jacobi_hypercube(A, b, x0, max_iter=100, tol=1e-6):
             
             x[i] = (b[i] - sigma) / A[i, i]
         
-        # Hypercube communication: exchange updates with neighbors in each dimension
-        # Process exchanges data along each dimension of the hypercube
+        # Process exchanges 
         for dim in range(dimension):
             # Find neighbor in this dimension
             neighbor = rank ^ (1 << dim)
@@ -102,25 +101,19 @@ def jacobi_hypercube(A, b, x0, max_iter=100, tol=1e-6):
                 comm.Sendrecv(send_data, dest=neighbor,
                             recvbuf=recv_data, source=neighbor)
                 
-                # Update x with received data
+                # Update x 
                 x[recv_start:recv_end] = recv_data
         
-        # After all dimensions, do an Allgather to ensure all processes have all updates
-        # This ensures complete synchronization across the hypercube
         send_start, send_end = all_ranges[rank]
         send_data = x[send_start:send_end].copy()
         
-        # Gather counts and displacements
+        # counts and displacements
         counts = [all_ranges[p][1] - all_ranges[p][0] for p in range(size)]
         displs = [all_ranges[p][0] for p in range(size)]
-        
-        # Allgather to synchronize all updates
+
         comm.Allgatherv(send_data, [x, counts, displs, MPI.DOUBLE])
         
-        # Check difference for convergence 
         diff = np.linalg.norm(x - x_old, ord=np.inf)
-        
-        # All processes need to agree on convergence
         max_diff = comm.allreduce(diff, op=MPI.MAX)
         
         if rank == 0 and (iteration + 1) % 10 == 0:
@@ -151,7 +144,6 @@ def main():
     
     if rank == 0:
         # Generate the A, b and x0 for the system Ax = b
-        # Same system for comparison
         n = 8
         # A - diagonally dominant matrix
         A = np.array([
@@ -177,11 +169,6 @@ def main():
         print(b)
         print(f"\nInitial value x0:")
         print(x0)
-        print("\nHypercube topology explanation:")
-        print("- Processes are arranged in a d-dimensional hypercube")
-        print("- Each process communicates with d neighbors")
-        print("- Neighbor relationships are defined by flipping one bit at a time")
-        print()
     else:
         A = None
         b = None
@@ -209,16 +196,13 @@ def main():
         error = np.linalg.norm(x - x_exact)
         print(f"\nError compared to exact solution: {error:.2e}")
         
-        print(f"\n{'='*60}")
         print(f"PERFORMANCE SUMMARY")
-        print(f"{'='*60}")
         print(f"Topology: Hypercube")
         print(f"Number of processes: {comm.Get_size()}")
         print(f"Hypercube dimension: {int(math.log2(comm.Get_size()))}")
         print(f"Iterations: {iterations}")
         print(f"Execution time: {exec_time:.6f} seconds")
         print(f"Time per iteration: {exec_time/iterations:.6f} seconds")
-        print(f"{'='*60}")
 
 
 if __name__ == "__main__":

@@ -1,23 +1,3 @@
-Serial Jacobi
-______________________________________________
-n = 100
-Iterations: 15
-Execution time: 0.006598 seconds
-Time per iteration: 0.000440 seconds
-______________________________________________
-n = 1000
-Iterations: 15
-Execution time: 0.006598 seconds
-Time per iteration: 0.000440 seconds
-______________________________________________
-n = 50.000
-Iterations: 15
-Execution time: 0.006598 seconds
-Time per iteration: 0.000440 seconds
-______________________________________________
-
-
-
 Parallel Jacobi 
 _________________________________________________________________________________________________________
 No of processors    |   Size(n) |           Ring Gauss Seidel        |     Hypercube Gauss Seidel

@@ -33,7 +33,7 @@ def jacobi_ring(A, b, x0, max_iter=100, tol=1e-6):
         print(f"Ring topology: Each process passes updates around the ring")
         print(f"Tolerance: {tol}, Max iterations: {max_iter}")
     
-    # Store row ranges for all processes (needed for ring communication)
+    # Store row ranges for all processes 
     all_ranges = []
     for p in range(size):
         if p < remainder:
@@ -51,7 +51,7 @@ def jacobi_ring(A, b, x0, max_iter=100, tol=1e-6):
     for iteration in range(max_iter):
         x_old = x.copy()
         
-        # Each process computes its own rows using OLD values only (Jacobi)
+
         for i in range(start_row, end_row):
             # Calculate x[i] using the formula with x_old values
             sigma = 0.0
@@ -61,31 +61,23 @@ def jacobi_ring(A, b, x0, max_iter=100, tol=1e-6):
             
             x[i] = (b[i] - sigma) / A[i, i]
         
-        # Ring communication: pass updates around the ring
+        # Ring communication
         my_start, my_end = all_ranges[rank]
         current_data = x[my_start:my_end].copy()
         
-        # Pass data around the ring (size-1) times to collect all updates
         for step in range(1, size):
-            # Determine which process's data I'm receiving in this step
             sender = (rank - step + size) % size
             recv_start, recv_end = all_ranges[sender]
             recv_data = np.zeros(recv_end - recv_start)
             
-            # Send current data forward, receive new data from previous
             comm.Sendrecv(current_data, dest=next_rank,
                          recvbuf=recv_data, source=prev_rank)
             
-            # Update x with received data
             x[recv_start:recv_end] = recv_data
-            
-            # For next iteration, pass along what we just received
             current_data = recv_data
         
-        # Check difference for convergence 
+
         diff = np.linalg.norm(x - x_old, ord=np.inf)
-        
-        # All processes need to agree on convergence
         max_diff = comm.allreduce(diff, op=MPI.MAX)
         
         if rank == 0 and (iteration + 1) % 10 == 0:
@@ -115,8 +107,6 @@ def main():
     rank = comm.Get_rank()
     
     if rank == 0:
-        # Generate the A, b and x0 for the system Ax = b
-        # Same system as Gauss-Seidel for comparison
         n = 8
         # A - diagonally dominant matrix
         A = np.array([
@@ -169,15 +159,12 @@ def main():
         error = np.linalg.norm(x - x_exact)
         print(f"\nError compared to exact solution: {error:.2e}")
         
-        print(f"\n{'='*60}")
         print(f"PERFORMANCE SUMMARY")
-        print(f"{'='*60}")
         print(f"Topology: Ring")
         print(f"Number of processes: {comm.Get_size()}")
         print(f"Iterations: {iterations}")
         print(f"Execution time: {exec_time:.6f} seconds")
         print(f"Time per iteration: {exec_time/iterations:.6f} seconds")
-        print(f"{'='*60}")
 
 
 if __name__ == "__main__":
