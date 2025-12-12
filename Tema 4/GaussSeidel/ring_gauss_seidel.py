@@ -2,6 +2,14 @@ from mpi4py import MPI
 import numpy as np
 import time
 
+def generate_test_data(n):
+    A = np.random.rand(n, n) * 10
+    for i in range(n):
+        A[i, i] += sum(np.abs(A[i]))
+    b = np.random.rand(n) * 10
+    return A, b
+
+
 def gauss_seidel_ring(A, b, x0, max_iter=100, tol=1e-6):
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
@@ -113,21 +121,8 @@ def main():
     
     if rank == 0:
         # Generate the A, b and x0 for the the system Ax = b
-        n = 8
-        # A
-        A = np.array([
-            [10, -1,  2,  0,  0,  0,  0,  0],
-            [-1, 11, -1,  3,  0,  0,  0,  0],
-            [ 2, -1, 10, -1,  0,  0,  0,  0],
-            [ 0,  3, -1,  8,  0,  0,  0,  0],
-            [ 0,  0,  0,  0, 12, -1,  0,  0],
-            [ 0,  0,  0,  0, -1, 10,  2,  0],
-            [ 0,  0,  0,  0,  0,  2,  9, -1],
-            [ 0,  0,  0,  0,  0,  0, -1,  7]
-        ], dtype=float)
-        
-        # b
-        b = np.array([6, 25, -11, 15, 12, 9, 8, 6], dtype=float)
+        n = 100
+        A, b = generate_test_data(n)
         
         # x0
         x0 = np.zeros(n)
@@ -165,15 +160,12 @@ def main():
         error = np.linalg.norm(x - x_exact)
         print(f"\nError compared to exact solution: {error:.2e}")
         
-        print(f"\n{'='*60}")
         print(f"PERFORMANCE SUMMARY")
-        print(f"{'='*60}")
         print(f"Topology: Ring")
         print(f"Number of processes: {comm.Get_size()}")
         print(f"Iterations: {iterations}")
         print(f"Execution time: {exec_time:.6f} seconds")
         print(f"Time per iteration: {exec_time/iterations:.6f} seconds")
-        print(f"{'='*60}")
 
 
 if __name__ == "__main__":
