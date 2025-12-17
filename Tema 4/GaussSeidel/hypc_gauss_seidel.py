@@ -11,15 +11,40 @@ def generate_test_data(n):
     b = np.random.rand(n) * 10
     return A, b
 
+def hypercube_broadcast_block(x_block, owner, comm):
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    d = int(math.log2(size))
 
-def get_hypercube_neighbors(rank, dimension):
-    neighbors = []
-    for i in range(dimension):
-        neighbor = rank ^ (1 << i)  # XOR to flip the i-th bit
-        neighbors.append(neighbor)
-    return neighbors
+    virtual_rank = rank ^ owner
+
+    for k in range(d):
+        partner = virtual_rank ^ (1 << k)
+        real_partner = partner ^ owner
+
+        if virtual_rank < (1 << k):
+            comm.send(x_block, dest=real_partner)
+        elif virtual_rank < (1 << (k + 1)):
+            x_block = comm.recv(source=real_partner)
+
+    return x_block
+
+def gauss_seidel_block_update(x, start_row, end_row, A, b):
 
 
+    n = len(b)
+    # Each process updates its own rows
+    for i in range(start_row, end_row):
+        # Calculate x[i] using the formula
+        sigma = 0.0
+        for j in range(n):
+            if j != i:
+                sigma += A[i, j] * x[j]
+            
+        x[i] = (b[i] - sigma) / A[i, i]
+
+    return x[i]
+    
 def gauss_seidel_hypercube(A, b, x0, max_iter=100, tol=1e-6):
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
@@ -36,9 +61,6 @@ def gauss_seidel_hypercube(A, b, x0, max_iter=100, tol=1e-6):
     
     n = len(b)
     x = x0.copy()
-    
-    # Get hypercube neighbors
-    neighbors = get_hypercube_neighbors(rank, dimension)
     
     # How many rows each process will get
     rows_per_proc = n // size
@@ -75,38 +97,23 @@ def gauss_seidel_hypercube(A, b, x0, max_iter=100, tol=1e-6):
     # Do the iterations
     for iteration in range(max_iter):
         x_old = x.copy()
-        
-        # Each process updates its own rows
-        for i in range(start_row, end_row):
-            # Calculate x[i] using the formula
-            sigma = 0.0
-            for j in range(n):
-                if j != i:
-                    sigma += A[i, j] * x[j]
-            
-            x[i] = (b[i] - sigma) / A[i, i]
-        
         # Exchange updates with neighbors
-        for neighbor in neighbors:
-            if neighbor < size:
-                send_start, send_end = all_ranges[rank]
-                send_data = x[send_start:send_end].copy()
-                
-                recv_start, recv_end = all_ranges[neighbor]
-                recv_data = np.zeros(recv_end - recv_start)
-                
-                comm.Sendrecv(send_data, dest=neighbor,
-                            recvbuf=recv_data, source=neighbor)
-                
-                # Update x with received data
-                x[recv_start:recv_end] = recv_data
-        
-        send_start, send_end = all_ranges[rank]
-        send_data = x[send_start:send_end].copy()
-        
-        counts = [all_ranges[p][1] - all_ranges[p][0] for p in range(size)]
-        displs = [all_ranges[p][0] for p in range(size)]
-        comm.Allgatherv(send_data, [x, counts, displs, MPI.DOUBLE])
+        for owner in range(size):
+            if rank == owner:
+                # Get my block
+                owner_start, owner_end = all_ranges[owner]
+                x_block = gauss_seidel_block_update(x, owner_start, owner_end, A, b)
+            else:
+                # Prepare to receive the block
+                owner_start, owner_end = all_ranges[owner]
+                x_block = np.zeros(owner_end - owner_start)
+
+            # Broadcast the block from owner to all processes
+            x_block = hypercube_broadcast_block(x_block, owner, comm)
+
+            # Update local view of x with the received block
+            owner_start, owner_end = all_ranges[owner]
+            x[owner_start:owner_end] = x_block
         
         # Check difference for convergence 
         diff = np.linalg.norm(x - x_old, ord=np.inf)

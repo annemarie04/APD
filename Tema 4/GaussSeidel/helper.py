@@ -10,6 +10,29 @@ def debug_print(message):
     if rank == 0:
         print(f"[Rank {rank}] {message}")
 
+def gauss_seidel_block_update(x_global):
+
+    
+    return x_global
+
+def hypercube_broadcast_block(x_block, owner, comm):
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    d = int(math.log2(size))
+
+    virtual_rank = rank ^ owner
+
+    for k in range(d):
+        partner = virtual_rank ^ (1 << k)
+        real_partner = partner ^ owner
+
+        if virtual_rank < (1 << k):
+            comm.send(x_block, dest=real_partner)
+        elif virtual_rank < (1 << (k + 1)):
+            x_block = comm.recv(source=real_partner)
+
+    return x_block
+
 def get_hypercube_neighbors(rank, dimension):
     neighbors = []
     for i in range(dimension):
@@ -78,52 +101,71 @@ def gauss_seidel_hypercube( x0, max_iter=10):
         # After d dimensions, all processes have all data
         
         # Track which ranges we currently have data for
-        have_data = [False] * size
-        have_data[rank] = True
+        # have_data = [False] * size
+        # have_data[rank] = True
         
-        for dim in range(dimension):
-            # Find neighbor in this dimension
-            neighbor = rank ^ (1 << dim)
+        # for dim in range(dimension):
+        #     # Find neighbor in this dimension
+        #     neighbor = rank ^ (1 << dim)
             
-            if neighbor < size:
-                # Determine what neighbor has: 
-                # They have data from processes that match their bits up to dimension dim
-                neighbor_has = [False] * size
-                for p in range(size):
-                    # Check if neighbor has data for process p
-                    # Neighbor has p if p's XOR with neighbor differs only in lower 'dim' bits
-                    diff = p ^ neighbor
-                    if diff < (1 << dim):
-                        neighbor_has[p] = True
+        #     if neighbor < size:
+        #         # Determine what neighbor has: 
+        #         # They have data from processes that match their bits up to dimension dim
+        #         neighbor_has = [False] * size
+        #         for p in range(size):
+        #             # Check if neighbor has data for process p
+        #             # Neighbor has p if p's XOR with neighbor differs only in lower 'dim' bits
+        #             diff = p ^ neighbor
+        #             if diff < (1 << dim):
+        #                 neighbor_has[p] = True
                 
-                debug_print(f"Iteration {iteration}, Dimension {dim}, Rank {rank} exchanging with Neighbor {neighbor} who has {neighbor_has}")
-                # Collect all data I currently have to send
-                send_data_list = []
-                for p in range(size):
-                    if have_data[p]:
-                        p_start, p_end = all_ranges[p]
-                        send_data_list.append(x[p_start:p_end])
+        #         debug_print(f"Iteration {iteration}, Dimension {dim}, Rank {rank} exchanging with Neighbor {neighbor} who has {neighbor_has}")
+        #         # Collect all data I currently have to send
+        #         send_data_list = []
+        #         for p in range(size):
+        #             if have_data[p]:
+        #                 p_start, p_end = all_ranges[p]
+        #                 send_data_list.append(x[p_start:p_end])
                 
-                send_data = np.concatenate(send_data_list) if send_data_list else np.array([])
+        #         send_data = np.concatenate(send_data_list) if send_data_list else np.array([])
                 
-                # Calculate receive buffer size based on what neighbor has
-                recv_size = sum(all_ranges[p][1] - all_ranges[p][0] for p in range(size) if neighbor_has[p])
-                recv_data = np.zeros(recv_size)
+        #         # Calculate receive buffer size based on what neighbor has
+        #         recv_size = sum(all_ranges[p][1] - all_ranges[p][0] for p in range(size) if neighbor_has[p])
+        #         recv_data = np.zeros(recv_size)
                 
-                # Exchange all accumulated data with neighbor
-                comm.Sendrecv(send_data, dest=neighbor,
-                            recvbuf=recv_data, source=neighbor)
+        #         # Exchange all accumulated data with neighbor
+        #         comm.Sendrecv(send_data, dest=neighbor,
+        #                     recvbuf=recv_data, source=neighbor)
                 
-                # Unpack received data into x
-                offset = 0
-                for p in range(size):
-                    if neighbor_has[p]:
-                        p_start, p_end = all_ranges[p]
-                        count = p_end - p_start
-                        x[p_start:p_end] = recv_data[offset:offset + count]
-                        have_data[p] = True
-                        offset += count
+        #         # Unpack received data into x
+        #         offset = 0
+        #         for p in range(size):
+        #             if neighbor_has[p]:
+        #                 p_start, p_end = all_ranges[p]
+        #                 count = p_end - p_start
+        #                 x[p_start:p_end] = recv_data[offset:offset + count]
+        #                 have_data[p] = True
+        #                 offset += count
         
+
+
+
+        for owner in range(size):
+            if rank == owner:
+                # Get my block
+                owner_start, owner_end = all_ranges[owner]
+                x_block = x[owner_start:owner_end].copy()
+            else:
+                # Prepare to receive the block
+                owner_start, owner_end = all_ranges[owner]
+                x_block = np.zeros(owner_end - owner_start)
+
+            # Broadcast the block from owner to all processes
+            x_block = hypercube_broadcast_block(x_block, owner, comm)
+
+            # Update local view of x with the received block
+            owner_start, owner_end = all_ranges[owner]
+            x[owner_start:owner_end] = x_block
         if rank == 0:
             print(x)
 
