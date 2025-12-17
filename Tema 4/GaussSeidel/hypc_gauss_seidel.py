@@ -88,17 +88,13 @@ def gauss_seidel_hypercube(A, b, x0, max_iter=100, tol=1e-6):
         
         # Exchange updates with neighbors
         for neighbor in neighbors:
-            
             if neighbor < size:
-                # Prepare my updated rows to send
                 send_start, send_end = all_ranges[rank]
                 send_data = x[send_start:send_end].copy()
                 
-                # Prepare to receive neighbor's rows
                 recv_start, recv_end = all_ranges[neighbor]
                 recv_data = np.zeros(recv_end - recv_start)
                 
-                # Exchange data with neighbor
                 comm.Sendrecv(send_data, dest=neighbor,
                             recvbuf=recv_data, source=neighbor)
                 
@@ -108,17 +104,12 @@ def gauss_seidel_hypercube(A, b, x0, max_iter=100, tol=1e-6):
         send_start, send_end = all_ranges[rank]
         send_data = x[send_start:send_end].copy()
         
-        # Gather counts and displacements
         counts = [all_ranges[p][1] - all_ranges[p][0] for p in range(size)]
         displs = [all_ranges[p][0] for p in range(size)]
-        
-        # Allgather to synchronize all updates
         comm.Allgatherv(send_data, [x, counts, displs, MPI.DOUBLE])
         
         # Check difference for convergence 
         diff = np.linalg.norm(x - x_old, ord=np.inf)
-        
-        # All processes need to agree on convergence
         max_diff = comm.allreduce(diff, op=MPI.MAX)
         
         if rank == 0 and (iteration + 1) % 10 == 0:
