@@ -1,3 +1,4 @@
+/usr/local/bin/mpiexec --oversubscribe -n 8 "/Users/anne/Desktop/FMI/FMI - V/APD/.venv/bin/python" hypc_gauss_seidel.py
 Serial Gauss Seidel
 _________________________________________________________________________________________________________
 n = 8

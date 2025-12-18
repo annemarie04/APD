@@ -30,8 +30,6 @@ def hypercube_broadcast_block(x_block, owner, comm):
     return x_block
 
 def gauss_seidel_block_update(x, start_row, end_row, A, b):
-
-
     n = len(b)
     # Each process updates its own rows
     for i in range(start_row, end_row):
