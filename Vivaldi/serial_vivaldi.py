@@ -1,4 +1,5 @@
 """
+# TODO: Add description of parameter t
 Algorithm Serial:
     Input: matricea de latenta L; coordonatele initiale x
     Output: coordonatele mai precise in x
@@ -35,6 +36,7 @@ def compute_error(L, x):
                 predicted = np.linalg.norm(x[i] - x[j])
                 actual = L[i, j]
 
+                # TODO: This should be squared error?
                 error = abs(predicted - actual) / actual
                 total_error += error
                 count += 1
@@ -61,6 +63,7 @@ def compute_coordinates(L, x, tolerance=0.05, t=0.1):
             
             # Forta de la toate celelalte noduri
             for j in range(n):
+                # TODO: assert(L[i, j] >= 0)
                 if i != j and L[i, j] > 0:
                     # Calculeaza eroare/forta arcului (1)
                     predicted_distance = np.linalg.norm(x[i] - x[j])

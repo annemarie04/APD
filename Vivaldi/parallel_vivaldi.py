@@ -64,16 +64,18 @@ class VivaldiNode:
         if measured_rtt > 0:
             es = abs(predicted_distance - measured_rtt) / measured_rtt
         else:
+            # TODO: ...
             es = abs(predicted_distance - measured_rtt)
         
         # (3) Update weighted moving average of local error
         self.error = es * ce * w + self.error * (1 - ce * w)
-        
+       
+        # TODO: Why?
         # Prevent error from getting too small
         self.error = max(self.error, 0.01)
         
         # Calculate the direction to move (unit vector u(xi - xj))
-        if predicted_distance > 0.001:
+        if predicted_distance > 0.001: # TODO: Why?
             # Direction from other node to this node
             direction = (self.position - other_position) / predicted_distance
         else:
@@ -117,6 +119,7 @@ def generate_rtt_matrix(num_nodes: int, dimensions: int = 2, seed: int = 42):
                 # True RTT is Euclidean distance + small random noise
                 distance = np.linalg.norm(true_positions[i] - true_positions[j])
                 # Add small measurement noise (5% of distance)
+                # TODO: noise should be added on sample, not on creation
                 noise = np.random.normal(0, distance * 0.05)
                 rtt_matrix[i][j] = max(distance + noise, 0.01)
     
@@ -143,6 +146,7 @@ def run_vivaldi_mpi(max_rounds: int = 1000, convergence_threshold: float = 0.05,
     rank = comm.Get_rank()
     size = comm.Get_size()
     
+    # TODO: But do they, really, know the full matrix?
     # All nodes generate the same RTT matrix (they all know it)
     rtt_matrix, true_positions = generate_rtt_matrix(size, dimensions, seed=42)
     
