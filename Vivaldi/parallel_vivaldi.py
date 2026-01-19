@@ -19,16 +19,7 @@ from mpi4py import MPI
 
 
 class VivaldiNode:
-    """Represents a node in the Vivaldi coordinate system"""
-    
     def __init__(self, node_id: int, dimensions: int = 2):
-        """
-        Initialize a Vivaldi node
-        
-        Args:
-            node_id: Unique identifier for the node (MPI rank)
-            dimensions: Number of dimensions in the coordinate space (default: 2)
-        """
         self.node_id = node_id
         self.dimensions = dimensions
         # Initialize with small random perturbation to break symmetry
@@ -37,23 +28,14 @@ class VivaldiNode:
         np.random.seed(None)
         # Local error estimate (starts high, decreases as system stabilizes)
         self.error = 1.0
+        self.send_to = []  # List of node IDs to send updates to
+        self.receive_from = []  # List of node IDs to receive updates from
         
-    def distance_to_position(self, other_position: np.ndarray) -> float:
-        """Calculate Euclidean distance to another position"""
+    def distance_to_position(self, other_position):
         return np.linalg.norm(self.position - other_position)
     
-    def update_position(self, other_position: np.ndarray, other_error: float, 
+    def update_position_vivaldi(self, other_position, other_error, 
                        measured_rtt: float, ce: float = 0.25, cc: float = 0.25):
-        """
-        Update position based on measurement from another node
-        
-        Args:
-            other_position: Position coordinates of the other node
-            other_error: Error estimate of the other node
-            measured_rtt: Measured RTT to the other node
-            ce: Weight for local error update (default: 0.25)
-            cc: Coordinate update weight (default: 0.25)
-        """
         # Calculate predicted RTT based on current positions
         predicted_distance = self.distance_to_position(other_position)
         
@@ -64,48 +46,56 @@ class VivaldiNode:
         if measured_rtt > 0:
             es = abs(predicted_distance - measured_rtt) / measured_rtt
         else:
-            # TODO: ...
             es = abs(predicted_distance - measured_rtt)
         
         # (3) Update weighted moving average of local error
         self.error = es * ce * w + self.error * (1 - ce * w)
-       
-        # TODO: Why?
-        # Prevent error from getting too small
-        self.error = max(self.error, 0.01)
+    
         
         # Calculate the direction to move (unit vector u(xi - xj))
-        if predicted_distance > 0.001: # TODO: Why?
-            # Direction from other node to this node
-            direction = (self.position - other_position) / predicted_distance
-        else:
-            # If nodes are at (nearly) same position, establish an initial direction
-            direction = np.random.uniform(-1, 1, self.dimensions)
-            direction = direction / np.linalg.norm(direction)
-        
+        direction = (self.position - other_position) / predicted_distance
+
         # (4) Update local coordinates
         # δ = cc × w
         delta = cc * w
         # xi = xi + δ × (rtt - ||xi - xj||) × u(xi - xj)
+        old_position = self.position.copy()
         self.position = self.position + delta * (measured_rtt - predicted_distance) * direction
+        if self.node_id == 5:
+            print(f"Node {self.node_id} updated from {old_position} to {self.position} using measured RTT {measured_rtt} and predicted {predicted_distance}")
         
     def __repr__(self):
         return f"Node {self.node_id}: pos={self.position}, error={self.error:.4f}"
-
+    
+def generate_neighbors(self, rank, comm, size, num_close, num_far, rtt_matrix):
+          # Build the receive_from list based on closest and furthest nodes by RTT
+        all_other_ranks = [i for i in range(size) if i != rank]
+    
+        # Sort other nodes by RTT distance from this node
+        sorted_by_rtt = sorted(all_other_ranks, key=lambda x: rtt_matrix[rank][x])
+    
+        # Select closest and furthest nodes
+        actual_num_close = min(num_close, len(sorted_by_rtt))
+        actual_num_far = min(num_far, len(sorted_by_rtt))
+    
+        close_nodes = sorted_by_rtt[:actual_num_close]
+        far_nodes = sorted_by_rtt[-(actual_num_far):] if actual_num_far > 0 else sorted_by_rtt
+    
+        # Combine into receive_from list (avoiding duplicates if overlap)
+        receive_from = list(set(close_nodes + far_nodes))
+    
+        # Exchange receive_from lists so each node knows who wants to receive from them
+        # This determines the send_to list for each node
+        all_receive_lists = comm.allgather(receive_from)
+    
+        # Build send_to list: I send to nodes that have me in their receive_from list
+        send_to = []
+        for other_rank in range(size):
+            if other_rank != rank and rank in all_receive_lists[other_rank]:
+                send_to.append(other_rank)
+        return send_to, receive_from
 
 def generate_rtt_matrix(num_nodes: int, dimensions: int = 2, seed: int = 42):
-    """
-    Generate the RTT matrix that all nodes know
-    
-    Args:
-        num_nodes: Number of nodes in the network
-        dimensions: Number of dimensions for true positions
-        seed: Random seed for reproducibility
-        
-    Returns:
-        rtt_matrix: The RTT matrix
-        true_positions: The true positions used to generate RTTs
-    """
     np.random.seed(seed)
     
     # Generate true positions for nodes (ground truth)
@@ -117,181 +107,161 @@ def generate_rtt_matrix(num_nodes: int, dimensions: int = 2, seed: int = 42):
         for j in range(num_nodes):
             if i != j:
                 # True RTT is Euclidean distance + small random noise
-                distance = np.linalg.norm(true_positions[i] - true_positions[j])
+                rtt_matrix[i][j] = np.linalg.norm(true_positions[i] - true_positions[j])
                 # Add small measurement noise (5% of distance)
-                # TODO: noise should be added on sample, not on creation
-                noise = np.random.normal(0, distance * 0.05)
-                rtt_matrix[i][j] = max(distance + noise, 0.01)
-    
+                noise = np.random.normal(0, rtt_matrix[i][j] * 0.05)
+                rtt_matrix[i][j] = max(rtt_matrix[i][j] + noise, 0.01)
+
     return rtt_matrix, true_positions
 
-
-def run_vivaldi_mpi(max_rounds: int = 1000, convergence_threshold: float = 0.05,
-                    dimensions: int = 2, contacts_per_round: int = None):
-    """
-    Run Vivaldi algorithm in parallel using MPI with unrestricted communication
-    
-    Each MPI process represents a node that:
-    - Maintains its own coordinates and error estimate
-    - Exchanges information with all other nodes via MPI
-    - Updates its position based on a random subset of other nodes each round
-    
-    Args:
-        max_rounds: Maximum number of simulation rounds
-        convergence_threshold: Stop when average error falls below this
-        dimensions: Number of coordinate dimensions
-        contacts_per_round: Number of other nodes to contact per round (None = all nodes)
-    """
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-    
-    # TODO: But do they, really, know the full matrix?
-    # All nodes generate the same RTT matrix (they all know it)
-    rtt_matrix, true_positions = generate_rtt_matrix(size, dimensions, seed=42)
-    
-    # Each node creates its own VivaldiNode instance
-    node = VivaldiNode(rank, dimensions)
-    
-    # Store initial position for later visualization
-    initial_position = node.position.copy()
-    
-    # Determine how many nodes to contact per round
-    if contacts_per_round is None:
-        contacts_per_round = size - 1  # Contact all other nodes
-    else:
-        contacts_per_round = min(contacts_per_round, size - 1)
-    
-    if rank == 0:
-        print(f"Starting parallel Vivaldi with {size} nodes, {dimensions}D coordinates")
-        print(f"Algorithm parameters: ce=0.25, cc=0.25")
-        print(f"Communication: each node contacts {contacts_per_round} other nodes per round")
-        print(f"{'Round':<8} {'Avg Error':<15}")
-        print("-" * 30)
-    
-    # Run simulation rounds
-    for round_num in range(max_rounds):
-        # Determine which nodes to contact this round
-        all_other_ranks = [i for i in range(size) if i != rank]
-        
-        if contacts_per_round >= len(all_other_ranks):
-            # Contact all other nodes
-            contact_ranks = all_other_ranks
-        else:
-            # Randomly select a subset
-            random.seed(rank * 10000 + round_num)  # Deterministic for reproducibility
-            contact_ranks = random.sample(all_other_ranks, contacts_per_round)
-            random.seed(None)
-        
-        # Use allgather to exchange information with all nodes
-        my_info = {
-            'position': node.position.copy(),
-            'error': node.error,
-            'rank': rank
-        }
-        all_infos = comm.allgather(my_info)
-        
-        # Update position based on selected contact nodes
-        for contact_rank in contact_ranks:
-            contact_info = all_infos[contact_rank]
-            
-            # Get measured RTT to this contact
-            measured_rtt = rtt_matrix[rank][contact_rank]
-            
-            # Update my position based on contact's information
-            node.update_position(
-                contact_info['position'],
-                contact_info['error'],
-                measured_rtt
-            )
-        
-        # Calculate and print prediction error periodically
-        if round_num % 10 == 0:
-            # All ranks participate in gather
-            all_positions = comm.gather(node.position, root=0)
-            
-            if rank == 0:
-                # Only rank 0 calculates and prints
+def calculate_total_error(size, all_positions, rtt_matrix):
+                    # Calculate average prediction error
                 total_error = 0.0
                 count = 0
                 for i in range(size):
                     for j in range(i + 1, size):
                         actual_rtt = rtt_matrix[i][j]
                         predicted_rtt = np.linalg.norm(all_positions[i] - all_positions[j])
-                        relative_error = abs(predicted_rtt - actual_rtt) / actual_rtt
+                        relative_error = (predicted_rtt - actual_rtt)**2
                         total_error += relative_error
                         count += 1
+                return total_error, count
+
+def run_simulation(max_rounds: int = 1000, convergence_threshold: float = 0.05,
+                    dimensions: int = 2, num_close: int = 3, num_far: int = 2):
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    
+    # Generare pozitii reale si matrice RTT
+    rtt_matrix, true_positions = generate_rtt_matrix(size, dimensions, seed=42)
+    
+    # Initializare nod
+    node = VivaldiNode(rank, dimensions)
+    
+    # Pozitia initiala a nodului
+    initial_position = node.position.copy()
+
+    # Alege cui trimite si de la cine primeste
+    node.send_to, node.receive_from = generate_neighbors(node, rank, comm, size, num_close, num_far, rtt_matrix)
+
+    if rank == 0:
+        print(f"Starting parallel Vivaldi with {size} nodes, {dimensions}D coordinates")
+        print(f"Algorithm parameters: ce=0.25, cc=0.25")
+        print(f"Node selection: {num_close} closest + {num_far} furthest by RTT")
+        print(f"Communication: each node receives from {len(node.receive_from)} nodes, sends to ~{len(node.send_to)} nodes")
+        print("-" * 30)
+    
+    # Run simulation rounds
+    for round_num in range(max_rounds):
+
+        # Trimitere mesaje
+        send_requests = []
+        for dest_rank in node.send_to:
+            my_info = {
+            'position': node.position.copy(),
+            'error': node.error,
+            'rank': rank,
+            'rtt': rtt_matrix[rank][dest_rank]
+        }
+            req = comm.isend(my_info, dest=dest_rank, tag=round_num)
+            send_requests.append(req)
+        
+        # Primire mesaje
+        received_infos = {}
+        for src_rank in node.receive_from:
+            received_infos[src_rank] = comm.recv(source=src_rank, tag=round_num)
+        
+        # Asteapta finalizarea trimiterilor
+        MPI.Request.Waitall(send_requests)
+        
+        # Updateaza pozitiiile pe baza datelor primite
+        for src_rank in node.receive_from:
+            contact_info = received_infos[src_rank]
+            
+            # vivaldi update pentru fiecare mesaj primit
+            node.update_position_vivaldi(contact_info['position'], contact_info['error'], contact_info['rtt'])
+
+        # Synchronizare
+        comm.Barrier()
+        
+        # Print periodic
+        if round_num % 100 == 0:
+            # Fiecare nod trimite pozitia catre rank 0 prin comunicare punct-la-punct
+            if rank == 0:
+                all_positions = [None] * size
+                all_positions[0] = node.position.copy()
+
+                # Primeste pozitiile nodurilor
+                for src in range(1, size):
+                    all_positions[src] = comm.recv(source=src, tag=round_num + 100000)
                 
-                avg_error = total_error / count if count > 0 else 0.0
-                print(f"{round_num:<8} {avg_error:<15.6f}")
+                # Calculeaza eroare de predictie
+                total_error, count = calculate_total_error(size, all_positions, rtt_matrix)
+                print(f"Round: {round_num:<8} Total Error:{total_error:<15.6f}")
                 
-                # Check convergence
-                if avg_error < convergence_threshold:
+                # Verifica convergenta
+                if total_error < convergence_threshold:
                     print(f"\nConverged after {round_num + 1} rounds!")
                     converged = True
                 else:
                     converged = False
             else:
+                # Trimite pozitia catre rank 0
+                comm.send(node.position.copy(), dest=0, tag=round_num + 100000)
                 converged = False
             
-            # Broadcast convergence status to all ranks
+            # Am ajuns la precizia dorita
             converged = comm.bcast(converged, root=0)
             if converged:
                 break
     
-    # Final gathering of all positions and errors
-    final_positions = comm.gather(node.position, root=0)
-    initial_positions = comm.gather(initial_position, root=0)
-    final_errors = comm.gather(node.error, root=0)
+    # Final gathering of all positions and errors via point-to-point communication
+    if rank == 0:
+        # Rank 0 collects all data
+        final_positions = [None] * size
+        initial_positions = [None] * size
+        final_errors = [None] * size
+        
+        final_positions[0] = node.position.copy()
+        initial_positions[0] = initial_position.copy()
+        final_errors[0] = node.error
+        
+        # Receive from all other ranks
+        for src in range(1, size):
+            data = comm.recv(source=src, tag=999999)
+            final_positions[src] = data['final_position']
+            initial_positions[src] = data['initial_position']
+            final_errors[src] = data['error']
+    else:
+        # Other ranks send their data to rank 0
+        data = {
+            'final_position': node.position.copy(),
+            'initial_position': initial_position.copy(),
+            'error': node.error
+        }
+        comm.send(data, dest=0, tag=999999)
     
     # Rank 0 handles output and visualization
     if rank == 0:
-        print("\n" + "=" * 70)
-        print("Prediction Accuracy (sample pairs):")
-        print("=" * 70)
-        
-        sample_pairs = [(0, 1), (0, 2), (1, 2)] if size >= 3 else [(0, 1)]
-        for i, j in sample_pairs:
-            if j < size:
-                actual = rtt_matrix[i][j]
-                predicted = np.linalg.norm(final_positions[i] - final_positions[j])
-                error = abs(predicted - actual) / actual * 100
-                print(f"  Node {i} <-> Node {j}: "
-                      f"Actual={actual:.4f}, Predicted={predicted:.4f}, "
-                      f"Error={error:.2f}%")
-        
-        print("\n" + "=" * 70)
-        print("Summary:")
         print("=" * 70)
         print(f"  Total rounds: {round_num + 1}")
-        print(f"  Average node error: {np.mean(final_errors):.6f}")
         
-        # Calculate final overall error
-        total_error = 0.0
-        count = 0
-        for i in range(size):
-            for j in range(i + 1, size):
-                actual_rtt = rtt_matrix[i][j]
-                predicted_rtt = np.linalg.norm(final_positions[i] - final_positions[j])
-                relative_error = abs(predicted_rtt - actual_rtt) / actual_rtt
-                total_error += relative_error
-                count += 1
-        final_avg_error = total_error / count if count > 0 else 0.0
-        print(f"  Final prediction error: {final_avg_error:.6f}")
+        # Calculeaza eroarea totala de predictie
+        total_error, count = calculate_total_error(size, final_positions, rtt_matrix)
+        print(f"  Final prediction error: {total_error:.6f}")
         
-        # Plot results
+        # Plot 
         if dimensions == 2:
             plot_results(initial_positions, final_positions, true_positions, size)
 
-
 def plot_results(initial_positions, final_positions, true_positions, num_nodes):
-    """Plot initial, final, and true positions"""
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
     
     initial_pos = np.array(initial_positions)
     final_pos = np.array(final_positions)
     
-    # Initial positions
+    # Pozitii initiale
     ax1.scatter(initial_pos[:, 0], initial_pos[:, 1], c='blue', s=100, 
                 alpha=0.6, edgecolors='black')
     for i, pos in enumerate(initial_pos):
@@ -303,7 +273,7 @@ def plot_results(initial_positions, final_positions, true_positions, num_nodes):
     ax1.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
     ax1.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
     
-    # Final positions
+    # Pozitii finale
     ax2.scatter(final_pos[:, 0], final_pos[:, 1], c='red', s=100, 
                 alpha=0.6, edgecolors='black')
     for i, pos in enumerate(final_pos):
@@ -315,7 +285,7 @@ def plot_results(initial_positions, final_positions, true_positions, num_nodes):
     ax2.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
     ax2.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
     
-    # True positions
+    # Pozitii reale
     ax3.scatter(true_positions[:, 0], true_positions[:, 1], c='green', s=100, 
                 alpha=0.6, edgecolors='black')
     for i, pos in enumerate(true_positions):
@@ -334,12 +304,15 @@ def plot_results(initial_positions, final_positions, true_positions, num_nodes):
 
 
 def main():
-    """Main function to run the parallel Vivaldi simulation"""
-    # You can adjust contacts_per_round to limit communication:
-    # - None or size-1: contact all other nodes each round (unrestricted)
-    # - 5-10: contact a random subset for efficiency
-    run_vivaldi_mpi(max_rounds=1000, convergence_threshold=0.05, 
-                    dimensions=2, contacts_per_round=None)
+    # Parametrii Simulare
+    max_rounds = 1000
+    convergence_threshold = 20
+    dimensions = 2
+    num_close = 20
+    num_far = 20
+
+    # Rularea Simularii
+    run_simulation(max_rounds, convergence_threshold, dimensions, num_close, num_far)
 
 
 if __name__ == "__main__":

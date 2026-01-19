@@ -36,8 +36,8 @@ def compute_error(L, x):
                 predicted = np.linalg.norm(x[i] - x[j])
                 actual = L[i, j]
 
-                # TODO: This should be squared error?
-                error = abs(predicted - actual) / actual
+                # Squared error
+                error = (predicted - actual) ** 2
                 total_error += error
                 count += 1
     
